@@ -6,11 +6,13 @@
 //! colophon parse <file>
 //! colophon parse --from-string '<session-xattr-value>'
 //! colophon parse --format json <file>
+//! colophon stale <dir>
+//! colophon stale --consumer <binary> --format json <dir>
 //! ```
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 use clap::{Parser, Subcommand};
-use colophon::{parse, read_file, Provenance};
+use colophon::{parse, read_file, stale, Provenance, StaleOpts, StaleReason, Staleness};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -40,12 +42,45 @@ enum Commands {
         #[arg(long, value_enum, default_value = "text")]
         format: Format,
     },
+
+    /// Walk a directory and flag files whose provenance shows the writing
+    /// session is dead or whose prov.ts predates the consuming binary.
+    Stale {
+        /// Directory to walk.
+        #[arg(value_name = "DIR")]
+        dir: PathBuf,
+
+        /// Output format.
+        #[arg(long, value_enum, default_value = "text")]
+        format: Format,
+
+        /// Path to a consumer binary; enables the OlderThanConsumer check.
+        #[arg(long, value_name = "BINARY")]
+        consumer: Option<PathBuf>,
+
+        /// Minimum age (in seconds) a file's prov.ts must be before the writing
+        /// pid is checked for liveness.  Default: 3600 (1 h).
+        #[arg(long, value_name = "SECS", default_value = "3600")]
+        min_age: u64,
+
+        /// Show only verdicts matching this reason.
+        #[arg(long, value_enum, value_name = "REASON")]
+        reason: Option<ReasonFilter>,
+    },
 }
 
 #[derive(Clone, clap::ValueEnum)]
 enum Format {
     Text,
     Json,
+}
+
+/// Filter for the `--reason` flag of the `stale` subcommand.
+#[derive(Clone, clap::ValueEnum)]
+enum ReasonFilter {
+    WriterDead,
+    Older,
+    Any,
 }
 
 fn main() -> std::process::ExitCode {
@@ -60,41 +95,99 @@ fn main() -> std::process::ExitCode {
             file,
             from_string,
             format,
-        } => {
-            let prov: Provenance = if let Some(val) = from_string {
-                parse(&val, None)
-            } else if let Some(path) = file {
-                match read_file(&path) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        eprintln!("colophon: error reading {}: {e}", path.display());
-                        return std::process::ExitCode::FAILURE;
-                    }
-                }
-            } else {
-                eprintln!("colophon parse: provide FILE or --from-string");
-                return std::process::ExitCode::FAILURE;
-            };
+        } => run_parse(file, from_string, format),
 
-            match format {
-                Format::Json => {
-                    match serde_json::to_string_pretty(&prov) {
-                        Ok(s) => println!("{s}"),
-                        Err(e) => {
-                            eprintln!("colophon: serialization error: {e}");
-                            return std::process::ExitCode::FAILURE;
-                        }
-                    }
-                }
-                Format::Text => print_text(&prov),
-            }
-
-            std::process::ExitCode::SUCCESS
-        }
+        Commands::Stale {
+            dir,
+            format,
+            consumer,
+            min_age,
+            reason,
+        } => run_stale(dir, format, consumer, min_age, reason),
     }
 }
 
-fn print_text(p: &Provenance) {
+fn run_parse(
+    file: Option<PathBuf>,
+    from_string: Option<String>,
+    format: Format,
+) -> std::process::ExitCode {
+    let prov: Provenance = if let Some(val) = from_string {
+        parse(&val, None)
+    } else if let Some(path) = file {
+        match read_file(&path) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("colophon: error reading {}: {e}", path.display());
+                return std::process::ExitCode::FAILURE;
+            }
+        }
+    } else {
+        eprintln!("colophon parse: provide FILE or --from-string");
+        return std::process::ExitCode::FAILURE;
+    };
+
+    match format {
+        Format::Json => match serde_json::to_string_pretty(&prov) {
+            Ok(s) => println!("{s}"),
+            Err(e) => {
+                eprintln!("colophon: serialization error: {e}");
+                return std::process::ExitCode::FAILURE;
+            }
+        },
+        Format::Text => print_prov_text(&prov),
+    }
+
+    std::process::ExitCode::SUCCESS
+}
+
+fn run_stale(
+    dir: PathBuf,
+    format: Format,
+    consumer: Option<PathBuf>,
+    min_age: u64,
+    reason_filter: Option<ReasonFilter>,
+) -> std::process::ExitCode {
+    let opts = StaleOpts {
+        min_age_secs: min_age,
+        consumer,
+        skip_prefixes: vec![],
+    };
+
+    let mut verdicts = stale(&dir, &opts);
+
+    // Apply reason filter.
+    if let Some(filter) = reason_filter {
+        verdicts.retain(|v| match filter {
+            ReasonFilter::WriterDead => {
+                matches!(v.reason, StaleReason::WriterDead | StaleReason::Both)
+            }
+            ReasonFilter::Older => {
+                matches!(v.reason, StaleReason::OlderThanConsumer | StaleReason::Both)
+            }
+            ReasonFilter::Any => true,
+        });
+    }
+
+    match format {
+        Format::Json => match serde_json::to_string_pretty(&verdicts) {
+            Ok(s) => println!("{s}"),
+            Err(e) => {
+                eprintln!("colophon: serialization error: {e}");
+                return std::process::ExitCode::FAILURE;
+            }
+        },
+        Format::Text => {
+            for v in &verdicts {
+                print_staleness_text(v);
+            }
+        }
+    }
+
+    std::process::ExitCode::SUCCESS
+}
+
+fn print_prov_text(p: &Provenance) {
     println!("form:        {:?}", p.form);
     if !p.comm_chain.is_empty() {
         println!("comm-chain:  {}", p.comm_chain.join(" > "));
@@ -123,4 +216,22 @@ fn print_text(p: &Provenance) {
         }
     }
     println!("raw:         {}", p.raw);
+}
+
+fn print_staleness_text(v: &Staleness) {
+    println!(
+        "{}: {:?} (age {}d)",
+        v.path.display(),
+        v.reason,
+        v.age_days
+    );
+    if let Some(pid) = v.prov.pid {
+        println!("  pid:  {pid}");
+    }
+    if let Some(ts) = v.prov.ts {
+        println!("  ts:   {ts}");
+    }
+    if !v.prov.comm_chain.is_empty() {
+        println!("  chain: {}", v.prov.comm_chain.join(" > "));
+    }
 }
