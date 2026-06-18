@@ -8,10 +8,13 @@
 //! colophon parse --format json <file>
 //! colophon stale <dir>
 //! colophon stale --consumer <binary> --format json <dir>
+//! colophon attribute <dir>
+//! colophon attribute <dir> --format json --top 5 --by skill
 //! ```
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 use clap::{Parser, Subcommand};
+use colophon::attribute::{attribute, AttributeOpts, GroupBy};
 use colophon::{parse, read_file, stale, Provenance, StaleOpts, StaleReason, Staleness};
 use std::path::PathBuf;
 
@@ -67,6 +70,29 @@ enum Commands {
         #[arg(long, value_enum, value_name = "REASON")]
         reason: Option<ReasonFilter>,
     },
+
+    /// Walk a directory tree and report which sessions/skills wrote each file.
+    Attribute {
+        /// Root directory to walk.
+        #[arg(value_name = "DIR")]
+        dir: PathBuf,
+
+        /// Output format.
+        #[arg(long, value_enum, default_value = "text")]
+        format: Format,
+
+        /// Show only the top-N actor buckets (headline still counts all files).
+        #[arg(long, default_value_t = 10)]
+        top: usize,
+
+        /// Suppress buckets smaller than this many bytes.
+        #[arg(long, default_value_t = 0)]
+        min_bytes: u64,
+
+        /// Grouping key for actor buckets.
+        #[arg(long, value_enum, default_value = "skill")]
+        by: GroupBy,
+    },
 }
 
 #[derive(Clone, clap::ValueEnum)]
@@ -104,6 +130,14 @@ fn main() -> std::process::ExitCode {
             min_age,
             reason,
         } => run_stale(dir, format, consumer, min_age, reason),
+
+        Commands::Attribute {
+            dir,
+            format,
+            top,
+            min_bytes,
+            by,
+        } => run_attribute(dir, format, top, min_bytes, by),
     }
 }
 
@@ -187,13 +221,48 @@ fn run_stale(
     std::process::ExitCode::SUCCESS
 }
 
+fn run_attribute(
+    dir: PathBuf,
+    format: Format,
+    top: usize,
+    min_bytes: u64,
+    by: GroupBy,
+) -> std::process::ExitCode {
+    if !dir.exists() {
+        eprintln!("colophon attribute: directory does not exist: {}", dir.display());
+        return std::process::ExitCode::FAILURE;
+    }
+
+    let opts = AttributeOpts {
+        max_depth: 64,
+        top_n: top,
+        min_bytes,
+        group_by: by,
+    };
+    let report = attribute(&dir, &opts);
+
+    match format {
+        Format::Json => match serde_json::to_string_pretty(&report) {
+            Ok(s) => println!("{s}"),
+            Err(e) => {
+                eprintln!("colophon: serialization error: {e}");
+                return std::process::ExitCode::FAILURE;
+            }
+        },
+        Format::Text => colophon::attribute::print_text(&report, top),
+    }
+
+    std::process::ExitCode::SUCCESS
+}
+
 fn print_prov_text(p: &Provenance) {
     println!("form:        {:?}", p.form);
     if !p.comm_chain.is_empty() {
-        println!("comm-chain:  {}", p.comm_chain.join(" > "));
+        let chain = p.comm_chain.join(" > ");
+        println!("comm-chain:  {chain}");
     }
     if let Some(skill) = p.originating_skill() {
-        println!("skill:       {:?}", skill);
+        println!("skill:       {skill:?}");
     }
     if let Some(cwd) = &p.cwd {
         println!("cwd:         {cwd}");
@@ -232,6 +301,7 @@ fn print_staleness_text(v: &Staleness) {
         println!("  ts:   {ts}");
     }
     if !v.prov.comm_chain.is_empty() {
-        println!("  chain: {}", v.prov.comm_chain.join(" > "));
+        let chain = v.prov.comm_chain.join(" > ");
+        println!("  chain: {chain}");
     }
 }

@@ -4,7 +4,7 @@
 //! - all-zero 32-hex-char → Form::Unstamped
 //! - empty string → Form::Unstamped
 //! - No input causes a panic (proven by the table below)
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::doc_markdown)]
 
 use colophon::{parse, Form};
 

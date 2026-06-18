@@ -2,7 +2,13 @@
 //!
 //! --from-string path: always exercised.
 //! real-file path: skipped with eprintln! when getfattr reports no user.prov.session.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::print_stderr,
+    clippy::unnecessary_map_or
+)]
 
 use std::process::Command;
 

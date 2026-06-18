@@ -2,7 +2,7 @@
 //!
 //! Input: `comm-chain:bash>claude;env:CLAUDE_TOOL=/build;cwd:/x;pid:1;uid:1000`
 //! Expected: env["CLAUDE_TOOL"] == "/build"
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::doc_markdown, clippy::doc_link_with_quotes)]
 
 use colophon::parse;
 
