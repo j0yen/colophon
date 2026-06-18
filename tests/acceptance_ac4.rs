@@ -38,6 +38,8 @@ fn acceptance_ac4_empty_is_unstamped() {
 fn acceptance_ac4_fuzz_table_no_panic() {
     // Table of malformed / adversarial / edge-case inputs. parse() must return
     // without panicking for all of them.
+    // Pre-bind heap-allocated strings so they live for the duration of the slice.
+    let long_input = "a".repeat(10_000);
     let bad_inputs: &[&str] = &[
         // Truncated forms
         "comm-chain:",
@@ -64,7 +66,7 @@ fn acceptance_ac4_fuzz_table_no_panic() {
         "=====",
         "null",
         "\x00\x01\x02",
-        "a".repeat(10_000).as_str(),
+        &long_input,
         // Almost-AgentId (31 chars, 33 chars)
         "0102030405060708090a0b0c0d0e0f1",
         "0102030405060708090a0b0c0d0e0f100",
