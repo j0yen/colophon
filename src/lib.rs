@@ -1,4 +1,8 @@
-//! `colophon` — canonical decoder for the wintermute kernel's provfs provenance xattrs.
+//! `colophon` — canonical decoder for the wintermute kernel's provfs provenance xattrs, with
+//! tree-level attribution reporting.
+//!
+//! The [`attribute`] module adds `fn attribute(root, opts) -> Attribution` and the
+//! `colophon attribute <dir>` subcommand for cruft-origin analysis.
 //!
 //! The booted `7.0.11-arch1-1-wintermute` kernel stamps a structured
 //! `user.prov.session` xattr on every file. This crate is the single decoder
@@ -25,6 +29,8 @@ use std::io;
 use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+pub mod attribute;
 
 // ── Public types ────────────────────────────────────────────────────────────
 
@@ -82,7 +88,7 @@ impl Provenance {
     /// Return the originating wintermute skill inferred from the comm-chain,
     /// or `None` when the chain has no Claude link.
     ///
-    /// Priority order: Dream > Build > SelfReview > Claude.
+    /// Priority order: Dream > Build > `SelfReview` > Claude.
     #[must_use]
     pub fn originating_skill(&self) -> Option<Skill> {
         // Walk the chain once, recording the highest-priority match found.
@@ -94,7 +100,7 @@ impl Provenance {
             } else if lower.starts_with("claude-build") {
                 // higher than SelfReview and plain Claude
                 match found {
-                    None | Some(Skill::Claude) | Some(Skill::SelfReview) => {
+                    None | Some(Skill::Claude | Skill::SelfReview) => {
                         found = Some(Skill::Build);
                     }
                     Some(Skill::Build | Skill::Dream) => {}
@@ -106,13 +112,12 @@ impl Provenance {
                     }
                     Some(Skill::Build | Skill::SelfReview | Skill::Dream) => {}
                 }
-            } else if lower == "claude"
+            } else if (lower == "claude"
                 || lower.starts_with("claude-")
-                || is_bun_pool_claude(link)
+                || is_bun_pool_claude(link))
+                && found.is_none()
             {
-                if found.is_none() {
-                    found = Some(Skill::Claude);
-                }
+                found = Some(Skill::Claude);
             }
         }
         found
@@ -130,12 +135,21 @@ impl Provenance {
 pub fn parse(session: &str, ts: Option<&str>) -> Provenance {
     let ts_parsed: Option<u64> = ts.and_then(|s| s.trim().parse().ok());
     let raw = session.to_owned();
-
     let trimmed = session.trim();
 
-    // Empty → Unstamped
     if trimmed.is_empty() {
-        return Provenance {
+        return Provenance::unstamped(raw, ts_parsed);
+    }
+    if is_agent_id(trimmed) {
+        return parse_agent_id(trimmed, raw, ts_parsed);
+    }
+    parse_comm_chain(trimmed, raw, ts_parsed)
+}
+
+impl Provenance {
+    #[allow(clippy::missing_const_for_fn)] // vec! and BTreeMap::new aren't const
+    fn unstamped(raw: String, ts: Option<u64>) -> Self {
+        Self {
             form: Form::Unstamped,
             comm_chain: vec![],
             env: BTreeMap::new(),
@@ -143,36 +157,30 @@ pub fn parse(session: &str, ts: Option<&str>) -> Provenance {
             pid: None,
             uid: None,
             agent_session: None,
-            ts: ts_parsed,
+            ts,
             raw,
-        };
+        }
     }
+}
 
-    // 32-hex-char value (non-zero) → AgentId form
-    if is_agent_id(trimmed) {
-        let is_zero = trimmed.chars().all(|c| c == '0');
-        return Provenance {
-            form: if is_zero {
-                Form::Unstamped
-            } else {
-                Form::AgentId
-            },
-            comm_chain: vec![],
-            env: BTreeMap::new(),
-            cwd: None,
-            pid: None,
-            uid: None,
-            agent_session: if is_zero {
-                None
-            } else {
-                Some(trimmed.to_owned())
-            },
-            ts: ts_parsed,
-            raw,
-        };
+/// Parse a 32-hex-char value as `AgentId` or all-zero `Unstamped`.
+fn parse_agent_id(trimmed: &str, raw: String, ts: Option<u64>) -> Provenance {
+    let is_zero = trimmed.chars().all(|c| c == '0');
+    Provenance {
+        form: if is_zero { Form::Unstamped } else { Form::AgentId },
+        comm_chain: vec![],
+        env: BTreeMap::new(),
+        cwd: None,
+        pid: None,
+        uid: None,
+        agent_session: if is_zero { None } else { Some(trimmed.to_owned()) },
+        ts,
+        raw,
     }
+}
 
-    // CommChain form: split on ';', decode each field
+/// Parse a comm-chain (`;`-delimited) session string.
+fn parse_comm_chain(trimmed: &str, raw: String, ts: Option<u64>) -> Provenance {
     let mut comm_chain: Vec<String> = vec![];
     let mut env: BTreeMap<String, String> = BTreeMap::new();
     let mut cwd: Option<String> = None;
@@ -210,26 +218,16 @@ pub fn parse(session: &str, ts: Option<&str>) -> Provenance {
         // Unknown fields are silently ignored (forward-compatibility).
     }
 
-    // Determine form: if comm-chain was found → CommChain; else treat as
-    // a best-effort decode of an unrecognised but non-empty session.
-    let form = if !comm_chain.is_empty() || trimmed.starts_with("comm-chain:") {
-        Form::CommChain
-    } else {
-        // No recognised prefix at all — still not Unstamped (value is non-empty
-        // and not a hex id), but there's no comm-chain. We treat this as
-        // CommChain with empty chain so the caller still gets cwd/pid/uid.
-        Form::CommChain
-    };
-
+    // All non-empty, non-hex-id values are treated as CommChain form.
     Provenance {
-        form,
+        form: Form::CommChain,
         comm_chain,
         env,
         cwd,
         pid,
         uid,
         agent_session: None,
-        ts: ts_parsed,
+        ts,
         raw,
     }
 }

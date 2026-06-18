@@ -6,7 +6,7 @@
 //! - "zsh>claude-self-review" → SelfReview
 //! - "bash>zsh>xterm" → None
 //! - plain "claude" link → Claude
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::doc_markdown)]
 
 use colophon::{parse, Skill};
 

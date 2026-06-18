@@ -2,7 +2,7 @@
 //!
 //! Input: `comm-chain:cat>zsh>claude;cwd:/home/jsy/wintermute/autobuilder;pid:2662703;uid:1000`
 //! Expected: comm_chain==["cat","zsh","claude"], cwd==Some("..."), pid==Some(2662703), uid==Some(1000), Form::CommChain
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::doc_markdown, clippy::doc_link_with_quotes)]
 
 use colophon::{parse, Form};
 

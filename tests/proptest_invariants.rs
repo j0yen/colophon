@@ -1,6 +1,6 @@
 //! Property-based tests for parse() invariants.
 //! READ-ONLY: do not modify in Stage 3 iterations.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::doc_markdown)]
 
 use colophon::parse;
 use proptest::prelude::*;
