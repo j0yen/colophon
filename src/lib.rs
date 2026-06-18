@@ -4,6 +4,12 @@
 //! The [`attribute`] module adds `fn attribute(root, opts) -> Attribution` and the
 //! `colophon attribute <dir>` subcommand for cruft-origin analysis.
 //!
+//! The [`stale`] module adds `fn stale(root, opts) -> Vec<Staleness>` and the
+//! `colophon stale <dir>` subcommand for dead-session detection.
+//!
+//! The [`digest`] module adds `fn digest(opts) -> Digest` and the
+//! `colophon digest` subcommand that composes attribution + stale into one block.
+//!
 //! The booted `7.0.11-arch1-1-wintermute` kernel stamps a structured
 //! `user.prov.session` xattr on every file. This crate is the single decoder
 //! for both forms the kernel emits:
@@ -31,6 +37,8 @@ use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub mod attribute;
+pub mod digest;
+pub mod stale;
 
 // ── Public types ────────────────────────────────────────────────────────────
 

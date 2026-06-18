@@ -104,7 +104,7 @@ static SKIP_NAMES: &[&str] = &["target", ".git", "node_modules"];
 ///
 /// We check each component so that `some/deep/target/file` is also skipped.
 #[must_use]
-fn is_skip_prefixed(path: &Path) -> bool {
+pub fn is_skip_prefixed(path: &Path) -> bool {
     path.components().any(|c| {
         if let std::path::Component::Normal(name) = c {
             SKIP_NAMES.iter().any(|s| name == std::ffi::OsStr::new(s))

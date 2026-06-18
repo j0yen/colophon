@@ -6,16 +6,20 @@
 //! colophon parse <file>
 //! colophon parse --from-string '<session-xattr-value>'
 //! colophon parse --format json <file>
-//! colophon stale <dir>
-//! colophon stale --consumer <binary> --format json <dir>
 //! colophon attribute <dir>
 //! colophon attribute <dir> --format json --top 5 --by skill
+//! colophon stale <dir>
+//! colophon stale <dir> --consumer /usr/bin/colophon --format json
+//! colophon digest
+//! colophon digest --cruft-root ~/.cache/build-worktrees --config-root ~/.claude --format markdown
 //! ```
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 use clap::{Parser, Subcommand};
-use colophon::attribute::{attribute, AttributeOpts, GroupBy};
-use colophon::{parse, read_file, stale, Provenance, StaleOpts, StaleReason, Staleness};
+use colophon::attribute::{attribute, print_text as print_attribution, AttributeOpts, GroupBy};
+use colophon::digest::{digest, render_markdown, DigestOpts};
+use colophon::stale::{print_text as print_stale, stale, StaleOpts};
+use colophon::{parse, read_file, Provenance};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -46,31 +50,6 @@ enum Commands {
         format: Format,
     },
 
-    /// Walk a directory and flag files whose provenance shows the writing
-    /// session is dead or whose prov.ts predates the consuming binary.
-    Stale {
-        /// Directory to walk.
-        #[arg(value_name = "DIR")]
-        dir: PathBuf,
-
-        /// Output format.
-        #[arg(long, value_enum, default_value = "text")]
-        format: Format,
-
-        /// Path to a consumer binary; enables the OlderThanConsumer check.
-        #[arg(long, value_name = "BINARY")]
-        consumer: Option<PathBuf>,
-
-        /// Minimum age (in seconds) a file's prov.ts must be before the writing
-        /// pid is checked for liveness.  Default: 3600 (1 h).
-        #[arg(long, value_name = "SECS", default_value = "3600")]
-        min_age: u64,
-
-        /// Show only verdicts matching this reason.
-        #[arg(long, value_enum, value_name = "REASON")]
-        reason: Option<ReasonFilter>,
-    },
-
     /// Walk a directory tree and report which sessions/skills wrote each file.
     Attribute {
         /// Root directory to walk.
@@ -81,17 +60,59 @@ enum Commands {
         #[arg(long, value_enum, default_value = "text")]
         format: Format,
 
-        /// Show only the top-N actor buckets (headline still counts all files).
+        /// Maximum actor buckets to display.
         #[arg(long, default_value_t = 10)]
         top: usize,
 
-        /// Suppress buckets smaller than this many bytes.
+        /// Suppress actors with fewer total bytes than this.
         #[arg(long, default_value_t = 0)]
         min_bytes: u64,
 
         /// Grouping key for actor buckets.
         #[arg(long, value_enum, default_value = "skill")]
         by: GroupBy,
+    },
+
+    /// Walk a directory and flag files whose writer is dead or stale.
+    Stale {
+        /// Root directory to walk.
+        #[arg(value_name = "DIR")]
+        dir: PathBuf,
+
+        /// Output format.
+        #[arg(long, value_enum, default_value = "text")]
+        format: Format,
+
+        /// Optional consumer binary path; files older than its mtime are flagged OlderThanConsumer.
+        #[arg(long, value_name = "PATH")]
+        consumer: Option<PathBuf>,
+
+        /// Minimum age in seconds before a file with a dead pid is flagged (pid-reuse guard).
+        #[arg(long, default_value_t = 3600)]
+        min_age: u64,
+    },
+
+    /// Compose attribution + staleness into a single provenance digest block.
+    Digest {
+        /// Output format.
+        #[arg(long, value_enum, default_value = "markdown")]
+        format: DigestFormat,
+
+        /// Root(s) to attribute (cruft dirs). Repeatable.
+        #[arg(long, value_name = "PATH")]
+        cruft_root: Vec<PathBuf>,
+
+        /// Root(s) to check for staleness (config/state dirs). Repeatable.
+        #[arg(long, value_name = "PATH")]
+        config_root: Vec<PathBuf>,
+
+        /// Maximum actor buckets and stale entries in the output.
+        #[arg(long, default_value_t = 10)]
+        top: usize,
+
+        /// Optional consumer binary path for the OlderThanConsumer staleness check.
+        #[arg(long, value_name = "PATH")]
+        consumer: Option<PathBuf>,
     },
 }
 
@@ -101,12 +122,10 @@ enum Format {
     Json,
 }
 
-/// Filter for the `--reason` flag of the `stale` subcommand.
 #[derive(Clone, clap::ValueEnum)]
-enum ReasonFilter {
-    WriterDead,
-    Older,
-    Any,
+enum DigestFormat {
+    Markdown,
+    Json,
 }
 
 fn main() -> std::process::ExitCode {
@@ -123,14 +142,6 @@ fn main() -> std::process::ExitCode {
             format,
         } => run_parse(file, from_string, format),
 
-        Commands::Stale {
-            dir,
-            format,
-            consumer,
-            min_age,
-            reason,
-        } => run_stale(dir, format, consumer, min_age, reason),
-
         Commands::Attribute {
             dir,
             format,
@@ -138,8 +149,25 @@ fn main() -> std::process::ExitCode {
             min_bytes,
             by,
         } => run_attribute(dir, format, top, min_bytes, by),
+
+        Commands::Stale {
+            dir,
+            format,
+            consumer,
+            min_age,
+        } => run_stale(dir, format, consumer, min_age),
+
+        Commands::Digest {
+            format,
+            cruft_root,
+            config_root,
+            top,
+            consumer,
+        } => run_digest(format, cruft_root, config_root, top, consumer),
     }
 }
+
+// ── Subcommand handlers ───────────────────────────────────────────────────────
 
 fn run_parse(
     file: Option<PathBuf>,
@@ -169,53 +197,7 @@ fn run_parse(
                 return std::process::ExitCode::FAILURE;
             }
         },
-        Format::Text => print_prov_text(&prov),
-    }
-
-    std::process::ExitCode::SUCCESS
-}
-
-fn run_stale(
-    dir: PathBuf,
-    format: Format,
-    consumer: Option<PathBuf>,
-    min_age: u64,
-    reason_filter: Option<ReasonFilter>,
-) -> std::process::ExitCode {
-    let opts = StaleOpts {
-        min_age_secs: min_age,
-        consumer,
-        skip_prefixes: vec![],
-    };
-
-    let mut verdicts = stale(&dir, &opts);
-
-    // Apply reason filter.
-    if let Some(filter) = reason_filter {
-        verdicts.retain(|v| match filter {
-            ReasonFilter::WriterDead => {
-                matches!(v.reason, StaleReason::WriterDead | StaleReason::Both)
-            }
-            ReasonFilter::Older => {
-                matches!(v.reason, StaleReason::OlderThanConsumer | StaleReason::Both)
-            }
-            ReasonFilter::Any => true,
-        });
-    }
-
-    match format {
-        Format::Json => match serde_json::to_string_pretty(&verdicts) {
-            Ok(s) => println!("{s}"),
-            Err(e) => {
-                eprintln!("colophon: serialization error: {e}");
-                return std::process::ExitCode::FAILURE;
-            }
-        },
-        Format::Text => {
-            for v in &verdicts {
-                print_staleness_text(v);
-            }
-        }
+        Format::Text => print_text(&prov),
     }
 
     std::process::ExitCode::SUCCESS
@@ -228,16 +210,11 @@ fn run_attribute(
     min_bytes: u64,
     by: GroupBy,
 ) -> std::process::ExitCode {
-    if !dir.exists() {
-        eprintln!("colophon attribute: directory does not exist: {}", dir.display());
-        return std::process::ExitCode::FAILURE;
-    }
-
     let opts = AttributeOpts {
-        max_depth: 64,
         top_n: top,
         min_bytes,
         group_by: by,
+        ..AttributeOpts::default()
     };
     let report = attribute(&dir, &opts);
 
@@ -249,13 +226,103 @@ fn run_attribute(
                 return std::process::ExitCode::FAILURE;
             }
         },
-        Format::Text => colophon::attribute::print_text(&report, top),
+        Format::Text => print_attribution(&report, top),
     }
 
     std::process::ExitCode::SUCCESS
 }
 
-fn print_prov_text(p: &Provenance) {
+fn run_stale(
+    dir: PathBuf,
+    format: Format,
+    consumer: Option<PathBuf>,
+    min_age: u64,
+) -> std::process::ExitCode {
+    let opts = StaleOpts {
+        min_age_secs: min_age,
+        consumer,
+        ..StaleOpts::default()
+    };
+    let entries = stale(&dir, &opts);
+
+    match format {
+        Format::Json => match serde_json::to_string_pretty(&entries) {
+            Ok(s) => println!("{s}"),
+            Err(e) => {
+                eprintln!("colophon: serialization error: {e}");
+                return std::process::ExitCode::FAILURE;
+            }
+        },
+        Format::Text => print_stale(&entries),
+    }
+
+    std::process::ExitCode::SUCCESS
+}
+
+fn run_digest(
+    format: DigestFormat,
+    cruft_root: Vec<PathBuf>,
+    config_root: Vec<PathBuf>,
+    top: usize,
+    consumer: Option<PathBuf>,
+) -> std::process::ExitCode {
+    // Default roots if none provided.
+    let cruft_roots = if cruft_root.is_empty() {
+        default_cruft_roots()
+    } else {
+        cruft_root
+    };
+    let config_roots = if config_root.is_empty() {
+        default_config_roots()
+    } else {
+        config_root
+    };
+
+    let opts = DigestOpts {
+        cruft_roots,
+        config_roots,
+        top,
+        consumer,
+    };
+
+    let d = digest(&opts);
+
+    match format {
+        DigestFormat::Markdown => {
+            let md = render_markdown(&d, top);
+            print!("{md}");
+        }
+        DigestFormat::Json => match serde_json::to_string_pretty(&d) {
+            Ok(s) => println!("{s}"),
+            Err(e) => {
+                eprintln!("colophon: serialization error: {e}");
+                return std::process::ExitCode::FAILURE;
+            }
+        },
+    }
+
+    std::process::ExitCode::SUCCESS
+}
+
+// ── Default roots ─────────────────────────────────────────────────────────────
+
+fn default_cruft_roots() -> Vec<PathBuf> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/jsy".to_owned());
+    vec![
+        PathBuf::from(&home).join(".cache/build-worktrees"),
+        PathBuf::from(&home).join(".claude/projects"),
+    ]
+}
+
+fn default_config_roots() -> Vec<PathBuf> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/jsy".to_owned());
+    // ~/.claude top-level state only (projects dir is excluded via config to keep it fast).
+    vec![PathBuf::from(&home).join(".claude")]
+}
+
+// ── Parse text printer ────────────────────────────────────────────────────────
+
+fn print_text(p: &Provenance) {
     println!("form:        {:?}", p.form);
     if !p.comm_chain.is_empty() {
         let chain = p.comm_chain.join(" > ");
@@ -285,23 +352,4 @@ fn print_prov_text(p: &Provenance) {
         }
     }
     println!("raw:         {}", p.raw);
-}
-
-fn print_staleness_text(v: &Staleness) {
-    println!(
-        "{}: {:?} (age {}d)",
-        v.path.display(),
-        v.reason,
-        v.age_days
-    );
-    if let Some(pid) = v.prov.pid {
-        println!("  pid:  {pid}");
-    }
-    if let Some(ts) = v.prov.ts {
-        println!("  ts:   {ts}");
-    }
-    if !v.prov.comm_chain.is_empty() {
-        let chain = v.prov.comm_chain.join(" > ");
-        println!("  chain: {chain}");
-    }
 }
