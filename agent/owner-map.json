@@ -1,0 +1,17 @@
+{
+  "schema": "autobuilder.owner_map.v1",
+  "rules": [
+    { "glob": "src/**", "owner": "edit-agent", "mutable": true },
+    { "glob": "tests/acceptance_*.rs", "owner": "edit-agent", "mutable": true },
+    { "glob": "tests/proptest_invariants.rs", "owner": "scaffold", "mutable": false },
+    { "glob": "tests/mocks/**", "owner": "scaffold", "mutable": false },
+    { "glob": "Cargo.toml", "owner": "edit-agent", "mutable": true, "note": "deps only; [lints]/edition/msrv are scaffold-owned" },
+    { "glob": "Cargo.lock", "owner": "edit-agent", "mutable": true },
+    { "glob": "scripts/**", "owner": "scaffold", "mutable": false },
+    { "glob": "agent/**", "owner": "scaffold", "mutable": false },
+    { "glob": "clippy.toml", "owner": "scaffold", "mutable": false },
+    { "glob": "deny.toml", "owner": "scaffold", "mutable": false },
+    { "glob": "rust-toolchain.toml", "owner": "scaffold", "mutable": false },
+    { "glob": ".github/**", "owner": "scaffold", "mutable": false }
+  ]
+}

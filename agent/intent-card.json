@@ -1,0 +1,119 @@
+{
+  "schema": "autobuilder.intent_card.v1",
+  "prd_source": "/home/jsy/wintermute/autobuilder/PRD-colophon-parse.md",
+  "root_motivation": "The wintermute kernel stamps structured provenance xattrs on every file (user.prov.session, user.prov.ts), but no userspace tool decodes the structure — the only consumer (provenance-mcp) throws it away as an opaque string. Without a canonical parser, the skill attribution, agent identity, and environment that wrote every file are permanently invisible to the system. This crate is the single decoder that makes provenance first-class and prevents breakage when the agentns-id form activates.",
+  "user_persona": "Joe Yen running wintermute automation tools — Rust CLIs installed to ~/.local/bin/ on Arch Linux with the booted 7.0.11-arch1-1-wintermute kernel (provfs live). Also consumed programmatically by future colophon-attribute, colophon-stale, and colophon-digest crates.",
+  "unfakeable_metric": {
+    "name": "acceptance_tests_passing_count",
+    "lower_is_better": false,
+    "harness_command": "bash scripts/run-metrics.sh",
+    "target": 7
+  },
+  "acceptance_criteria": [
+    {
+      "id": "AC1",
+      "level": "MUST",
+      "description": "cargo build and cargo test are green; cargo clippy adds no new warnings over the autobuilder baseline; binary installs to ~/.local/bin/colophon.",
+      "test": "tests/acceptance_ac1.rs — cargo check/clippy/test all exit 0"
+    },
+    {
+      "id": "AC2",
+      "level": "MUST",
+      "description": "parse() decodes the live sample 'comm-chain:cat>zsh>claude;cwd:/home/jsy/wintermute/autobuilder;pid:2662703;uid:1000' into comm_chain==[\"cat\",\"zsh\",\"claude\"], cwd==Some(\"/home/jsy/wintermute/autobuilder\"), pid==Some(2662703), uid==Some(1000), Form::CommChain.",
+      "test": "tests/acceptance_ac2.rs — parse() called with that exact literal, fields asserted"
+    },
+    {
+      "id": "AC3",
+      "level": "MUST",
+      "description": "parse() decodes an env:-bearing sample (comm-chain:bash>claude;env:CLAUDE_TOOL=/build;cwd:/x;pid:1;uid:1000) with env[\"CLAUDE_TOOL\"]==\"/build\".",
+      "test": "tests/acceptance_ac3.rs — parse() with env field, BTreeMap lookup asserted"
+    },
+    {
+      "id": "AC4",
+      "level": "MUST",
+      "description": "A 32-hex-char non-zero value parses as Form::AgentId with agent_session set; an all-zero id and an empty string both parse as Form::Unstamped. No input — including malformed, truncated, or reordered — causes a panic (proven by a fuzz-style table of bad inputs).",
+      "test": "tests/acceptance_ac4.rs — table of inputs covering AgentId, Unstamped (all-zero, empty), and ~20 malformed inputs all non-panicking"
+    },
+    {
+      "id": "AC5",
+      "level": "MUST",
+      "description": "originating_skill() returns Dream for a chain containing claude-dream-he…, Build for claude-build…, SelfReview for claude-self…, and None for a pure bash>zsh>xterm chain (fixtures from real captured xattrs).",
+      "test": "tests/acceptance_ac5.rs — four fixture chains matched against expected Skill variants"
+    },
+    {
+      "id": "AC6",
+      "level": "MUST",
+      "description": "colophon parse --from-string '<value>' --format json emits structured fields; colophon parse <real-file> round-trips a file actually stamped by provfs (integration test skipped with logged note if getfattr reports no user.prov.session).",
+      "test": "tests/acceptance_ac6.rs — --from-string path exercised; real-file path skipped unless WM_PROVFS_PRESENT=1"
+    },
+    {
+      "id": "AC7",
+      "level": "MUST",
+      "description": "colophon parse piped to head does not panic (SIGPIPE reset verified).",
+      "test": "tests/acceptance_ac7.rs — pipes binary output through head -1, asserts exit is 0 or 141 (SIGPIPE), never a panic/abort"
+    }
+  ],
+  "scope": [
+    "Provenance struct modeling comm-chain, env, cwd, pid, uid, agent_session, ts, raw, and Form enum",
+    "parse(session, ts) function: pure, total, never panics",
+    "read_file(path) function: shells to getfattr, absent xattrs -> Unstamped",
+    "originating_skill() method: table-driven comm_chain matcher",
+    "colophon parse subcommand with --format text|json and --from-string",
+    "Binary installed to ~/.local/bin/colophon",
+    "SIGPIPE reset as first act of main()"
+  ],
+  "non_goals": [
+    "Tree-walking attribution (colophon-attribute is a follow-on PRD)",
+    "Stale detection (colophon-stale is a follow-on PRD)",
+    "Self-review digest (colophon-digest is a follow-on PRD)",
+    "Re-pointing or modifying provenance-mcp (open question in vision)",
+    "provfs kernel module — only userspace parsing",
+    "Async or tokio runtime — sync only",
+    "Writing or modifying xattrs — read-only"
+  ],
+  "hard_constraints": {
+    "rust_edition": "2021",
+    "target_kind": "cli",
+    "deny_unsafe": true,
+    "max_deps": 8,
+    "msrv": "1.85",
+    "additional": {
+      "sigpipe_reset_first": "sigpipe::reset() must be the first statement in main()",
+      "note_edition": "edition 2021 per PRD (MSRV 1.85 constraint; edition 2024 needs 1.85 but some features need newer)"
+    }
+  },
+  "five_whys_trace": [
+    {
+      "why": 1,
+      "q": "Why does this PRD build a provenance parser?",
+      "a": "The booted wintermute kernel stamps user.prov.session xattrs but the only consumer (provenance-mcp) discards the structure, returning an opaque string."
+    },
+    {
+      "why": 2,
+      "q": "Why is discarding the structure a problem?",
+      "a": "The comm-chain encodes which Claude skill wrote the file (dream, build, self-review) and the environment it ran in — skill attribution is permanently lost without a parser."
+    },
+    {
+      "why": 3,
+      "q": "Why does skill attribution matter?",
+      "a": "The entire colophon fleet (attribute, stale, digest) depends on knowing what wrote what — without the decoder, none of those future tools can be built."
+    },
+    {
+      "why": 4,
+      "q": "Why not patch provenance-mcp instead of a new crate?",
+      "a": "provenance-mcp has a different concern (MCP protocol bridge); a separate canonical decoder lets any tool depend on it without pulling in MCP protocol machinery. Also must handle both comm-chain and agentns-id forms from day one."
+    }
+  ],
+  "ambiguities_resolved": [
+    {
+      "question": "Should the crate be cli or lib? It needs both a library API and a binary.",
+      "resolution": "target_kind=cli with a pub lib module in src/lib.rs (standard Rust pattern). The binary in src/main.rs is thin."
+    },
+    {
+      "question": "Does AC6's real-file integration test block the gate on machines without provfs?",
+      "resolution": "No — skip with eprintln! when getfattr returns no user.prov.session. The --from-string path is always exercised."
+    }
+  ],
+  "intent_slug": "colophon-parse",
+  "created_at": "2026-06-18T00:00:00Z"
+}

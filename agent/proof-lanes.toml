@@ -1,0 +1,26 @@
+# proof-lanes.toml — maps changed paths to verification lanes.
+# Every path touched in a Stage 3 iteration must route to ≥1 lane.
+
+[[lane]]
+id = "parse-unit"
+description = "Unit tests for parse() and Provenance model"
+triggers = ["src/lib.rs"]
+gates = ["cargo test --lib", "cargo clippy"]
+
+[[lane]]
+id = "cli-integration"
+description = "CLI binary and acceptance tests"
+triggers = ["src/main.rs"]
+gates = ["cargo test --test acceptance_ac6", "cargo test --test acceptance_ac7"]
+
+[[lane]]
+id = "acceptance"
+description = "All acceptance tests"
+triggers = ["tests/acceptance_*.rs"]
+gates = ["cargo test --workspace --no-fail-fast"]
+
+[[lane]]
+id = "deps"
+description = "Dependency changes"
+triggers = ["Cargo.toml", "Cargo.lock"]
+gates = ["cargo deny check bans licenses sources", "cargo check --workspace"]

@@ -1,0 +1,12 @@
+{
+  "schema": "autobuilder.test_map.v1",
+  "mappings": [
+    { "ac_id": "AC1", "test_file": "tests/acceptance_ac1.rs", "test_fn": "acceptance_ac1_binary_runs" },
+    { "ac_id": "AC2", "test_file": "tests/acceptance_ac2.rs", "test_fn": "acceptance_ac2_parse_live_sample" },
+    { "ac_id": "AC3", "test_file": "tests/acceptance_ac3.rs", "test_fn": "acceptance_ac3_env_field" },
+    { "ac_id": "AC4", "test_file": "tests/acceptance_ac4.rs", "test_fn": "acceptance_ac4_fuzz_table_no_panic" },
+    { "ac_id": "AC5", "test_file": "tests/acceptance_ac5.rs", "test_fn": "acceptance_ac5_dream" },
+    { "ac_id": "AC6", "test_file": "tests/acceptance_ac6.rs", "test_fn": "acceptance_ac6_from_string_json" },
+    { "ac_id": "AC7", "test_file": "tests/acceptance_ac7.rs", "test_fn": "acceptance_ac7_sigpipe_no_panic" }
+  ]
+}
