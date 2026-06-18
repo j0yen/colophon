@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.5.0 — 2026-06-18
+
+colophon digest: compose attribute+stale over cruft/config dirs → markdown block; provfs-absent degrades to honest one-liner; --format markdown|json
+
 ## v0.4.0 — 2026-06-18
 
 colophon attribute: walk a tree, attribute files to writing actor via provfs xattrs; ranked table + json; --by skill|actor|cwd; skipped/unstamped buckets
