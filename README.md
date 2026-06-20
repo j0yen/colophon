@@ -1,49 +1,87 @@
 # colophon
 
-The booted `7.0.11-arch1-1-wintermute` kernel stamps a structured
+Reads the provenance xattr the wintermute kernel stamps on every file, and tells you who wrote what — which session, which skill, whether the writer is still alive.
 
-## Overview
+## Why it exists
 
-The booted `7.0.11-arch1-1-wintermute` kernel stamps a structured
-`user.prov.session` xattr on every file, but no userspace tool parses the
-structure. This PRD builds `colophon`, a new Rust CLI+library whose
-`Provenance` model and `parse()` function are the single canonical decoder of
-the enriched provfs format. It is the foundation crate the rest of the
-`colophon` fleet extends.
+The `7.0.11-arch1-1-wintermute` kernel stamps a `user.prov.session` xattr on every file it writes: the comm-chain that produced the write (`cat>zsh>claude`), the cwd, pid, uid, and — when present — a 32-hex agent-namespace id. The data is there on disk, but nothing in userspace reads it, so it sits unused. A file's origin is recorded and yet unanswerable.
 
-
-## Acceptance
-
-
-1. `cargo build` and `cargo test` are green; `cargo clippy` adds no new warnings
-   over the autobuilder baseline; binary installs to `~/.local/bin/colophon`.
-2. `parse()` decodes the live sample
-   `comm-chain:cat>zsh>claude;cwd:/home/jsy/wintermute/autobuilder;pid:2662703;uid:1000`
-   into `comm_chain == ["cat","zsh","claude"]`, `cwd == Some("/home/jsy/wintermute/autobuilder")`,
-   `pid == Some(2662703)`, `uid == Some(1000)`, `Form::CommChain`.
-3. `parse()` decodes an `env:`-bearing sample
-   (`comm-chain:bash>claude;env:CLAUDE_TOOL=/build;cwd:/x;pid:1;uid:1000`) with
-   `env["CLAUDE_TOOL"] == "/build"`.
-4. A 32-hex-char non-zero value parses as `Form::AgentId` with
-   `agent_session` set; an all-zero id and an empty string both parse as
-   `Form::Unstamped`. No input — including malformed, truncated, or reordered —
-   causes a panic (proven by a fuzz-style table of bad inputs).
-5. `originating_skill()` returns `Dream` for a chain containing
-   `claude-dream-he…`, `Build` for `claude-build…`, `SelfReview` for
-   `claude-self…`, and `None` for a pure `bash>zsh>xterm` chain (fixtures from
-   real captured xattrs).
-6. `colophon parse --from-string '<value>' --format json` emits the structured
-   fields; `colophon parse <real-file>` round-trips a file actually stamped by
-   provfs on this machine (integration test gated on provfs presence, skipped
-   with a logged note if `getfattr` reports no `user.prov.session`).
-7. `colophon parse` piped to `head` does not panic (SIGPIPE reset verified).
+`colophon` is the one decoder for that format. The `parse()` function and `Provenance` model are the canonical interpretation of the stamp; the rest of the tool builds questions on top of it — who wrote this tree, what's gone stale, what's the provenance story of this directory in one block.
 
 ## Install
 
+Requires `cargo` / `rustc` 1.85+. Installs to `~/.cargo/bin/colophon`.
+
 ```sh
-cargo install --path .
+git clone https://github.com/j0yen/colophon.git
+cd colophon
+cargo install --path . --locked
 ```
+
+## Commands
+
+```
+colophon parse <file>                  decode one file's provenance stamp
+colophon parse --from-string '<val>'   decode a literal xattr value
+colophon attribute <dir>               walk a tree: who wrote which files
+colophon stale <dir>                   flag files whose writer is dead or out of date
+colophon digest                        compose attribute + stale into one block
+```
+
+Every command is read-only and resets `SIGPIPE`, so piping into `head` never panics.
+
+### parse
+
+```sh
+$ colophon parse --from-string 'comm-chain:cat>zsh>claude;cwd:/home/jsy/wintermute;pid:2662703;uid:1000'
+form:        CommChain
+comm-chain:  cat > zsh > claude
+skill:       Claude
+cwd:         /home/jsy/wintermute
+pid:         2662703
+uid:         1000
+raw:         comm-chain:cat>zsh>claude;cwd:/home/jsy/wintermute;pid:2662703;uid:1000
+```
+
+`--format json` emits the structured fields instead. The decoder handles three forms — `CommChain` (the enriched stamp above, with optional `env:` pairs), `AgentId` (a 32-hex agent-namespace id), and `Unstamped` (empty, all-zero, or absent). Malformed, truncated, or reordered input never panics; it falls back to `Unstamped` or a best-effort parse.
+
+### attribute
+
+```sh
+colophon attribute <dir> --by skill   # rank actors by skill, --by actor, or --by cwd
+colophon attribute <dir> --top 10 --min-bytes 4096 --format json
+```
+
+Walks a tree (no symlink-follow), reads each file's stamp, and ranks the sessions or skills that wrote it by file count and total bytes. `target/`, `.git/`, and `node_modules/` go in a `skipped` bucket; stamped-but-unreadable files go in `unstamped`.
+
+### stale
+
+```sh
+colophon stale <dir> --min-age 3600 --consumer /path/to/binary
+```
+
+Flags files whose writing process is gone or whose work is out of date:
+
+- **WriterDead** — the stamped pid is absent from `/proc` and the file is older than `--min-age` (the age gate guards against pid reuse).
+- **OlderThanConsumer** — the file's `prov.ts` predates the mtime of `--consumer`.
+- **Both** — both hold.
+
+### digest
+
+```sh
+colophon digest --attribute <cruft-dir> --stale <state-dir> --format markdown
+```
+
+Composes `attribute` and `stale` over the directories you point it at into a single markdown (or JSON) block. When provfs isn't present, it degrades to an honest one-line note rather than inventing output.
+
+## How it's built
+
+A library crate (`parse`, `Provenance`, `attribute`, `stale`, `digest`) with the `colophon` binary on top. Reading xattrs requires the wintermute provfs kernel module; integration tests that need a live stamp are gated on its presence and skip with a logged note where it's absent.
+
+## Status
+
+`v0.5.0`. All four subcommands work; each acceptance criterion has a matching test under `tests/`. See [CHANGELOG.md](CHANGELOG.md) for the build history.
 
 ## License
 
-MIT © Joe Yen
+MIT OR Apache-2.0, at your option.
